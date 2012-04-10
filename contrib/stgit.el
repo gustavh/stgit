@@ -1319,6 +1319,29 @@ If ARG is non-nil, do this ARG times. If ARG is negative, move
           (stgit-next-patch 1)))
       (setq arg (1- arg)))))
 
+(defun stgit-stash-save ()
+  "Stash changes in working directory and index using `git-stash'."
+  (interactive)
+  (stgit-assert-mode)
+  (stgit-capture-output "*git output*"
+    (stgit-run-git "stash"))
+  (stgit-reload))
+
+(defun stgit-stash-apply ()
+  "Restore changes recorded in the stash on top of the current working tree."
+  (interactive)
+  (stgit-assert-mode)
+  (stgit-capture-output "*git output*"
+    (stgit-run-git "stash" "apply"))
+  (stgit-reload))
+
+(defun stgit-stash-list ()
+  "List stashes available."
+  (interactive)
+  (stgit-assert-mode)
+  (stgit-capture-output "*git output*"
+    (stgit-run-git "stash" "list")))
+
 (defvar stgit-mode-hook nil
   "Run after `stgit-mode' is setup.")
 
@@ -1327,6 +1350,7 @@ If ARG is non-nil, do this ARG times. If ARG is negative, move
 
 (unless stgit-mode-map
   (let ((diff-map   (make-sparse-keymap))
+        (stash-map  (make-sparse-keymap))
         (toggle-map (make-sparse-keymap)))
     (mapc (lambda (arg) (define-key diff-map (car arg) (cdr arg)))
           '(("b" .        stgit-diff-base)
@@ -1342,6 +1366,10 @@ If ARG is non-nil, do this ARG times. If ARG is negative, move
             ("i" .        stgit-toggle-ignored)
             ("u" .        stgit-toggle-unknown)
             ("s" .        stgit-toggle-svn)))
+    (mapc (lambda (arg) (define-key stash-map (car arg) (cdr arg)))
+          '(("$" .        stgit-stash-save)
+            ("a" .        stgit-stash-apply)
+            ("l" .        stgit-stash-list)))
     (setq stgit-mode-map (make-keymap))
     (suppress-keymap stgit-mode-map)
     (mapc (lambda (arg) (define-key stgit-mode-map (car arg) (cdr arg)))
@@ -1393,6 +1421,7 @@ If ARG is non-nil, do this ARG times. If ARG is negative, move
             ("\C-c\C-_" . stgit-redo)
             ("B" .        stgit-branch)
             ("\C-c\C-b" . stgit-rebase)
+            ("$" .        ,stash-map)
             ("t" .        ,toggle-map)
             ("d" .        ,diff-map)
             ("q" .        stgit-quit)
