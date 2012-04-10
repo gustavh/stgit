@@ -494,9 +494,13 @@ Returns the return value of BODY."
   "Returns non-nil if the index contains no changes from HEAD."
   (zerop (stgit-run-git-silent "diff-index" "--cached" "--quiet" "HEAD")))
 
-(defun stgit-work-tree-empty-p ()
+(defun stgit-work-tree-empty-p (&optional allow-unmerged)
   "Returns non-nil if the work tree contains no changes from index."
-  (zerop (stgit-run-git-silent "diff-files" "--quiet")))
+  (zerop (apply 'stgit-run-git-silent
+		"diff-files" "--quiet"
+		(if allow-unmerged
+		    '("--diff-filter=ACDMRTXB" "-0")
+		  nil))))
 
 (defvar stgit-did-advise nil
   "Set to non-nil if appropriate (non-stgit) git functions have
@@ -2271,7 +2275,7 @@ tree, or a single change in either."
           (error (format "There are no changes in the %s to revert"
                          patch-desc)))
         (and (eq patch-name :index)
-             (not (stgit-work-tree-empty-p))
+             (not (stgit-work-tree-empty-p t))
              (error "Cannot revert index as work tree contains unstaged changes"))
 
         (when (yes-or-no-p (format "Revert all changes in the %s? "
