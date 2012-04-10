@@ -36,7 +36,9 @@ object."""
 
 args = [argparse.patch_range(argparse.applied_patches,
                              argparse.unapplied_patches,
-                             argparse.hidden_patches)]
+                             argparse.hidden_patches),
+        argparse.commit]
+
 options = [
     opt('-n', '--name',
         short = 'Use NAME as the patch name'),
