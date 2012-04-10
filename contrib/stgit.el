@@ -2777,7 +2777,9 @@ Interactively, squash the marked patches.
 
 Unless there are any conflicts, the patches will be merged into
 one patch, which will occupy the same spot in the series as the
-deepest patch had before the squash."
+deepest patch had before the squash.
+
+The merged patch will retain the name of the deepest patch."
   (interactive (list stgit-marked-patches))
   (stgit-assert-mode)
   (when (< (length patchsyms) 2)
@@ -2810,7 +2812,10 @@ deepest patch had before the squash."
   (let ((file (make-temp-file "stgit-edit-")))
     (write-region (point-min) (point-max) file)
     (stgit-capture-output nil
-      (apply 'stgit-run "squash" "-f" file "--" stgit-patchsyms))
+      (apply 'stgit-run "squash"
+	     "-f" file
+	     "-n" (symbol-name (car stgit-patchsyms))
+	     "--" stgit-patchsyms))
     (with-current-buffer log-edit-parent-buffer
       (stgit-clear-marks)
       ;; Go to first marked patch and stay there
