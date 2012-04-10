@@ -269,6 +269,18 @@ format characters are recognized:
   "StGit mode face used for modified file status"
   :group 'stgit-faces)
 
+(defface stgit-word-diff-old
+  '((((class color) (background light)) (:weight bold :foreground "dark red"))
+    (((class color) (background dark)) (:foreground "red")))
+  "StGit face used for old text in word diffs."
+  :group 'stgit-faces)
+
+(defface stgit-word-diff-new
+  '((((class color) (background light)) (:weight bold :foreground "dark green"))
+    (((class color) (background dark)) (:foreground "green")))
+  "StGit face used for new text in word diffs."
+  :group 'stgit-faces)
+
 (defun stgit (dir)
   "Manage StGit patches for the tree in DIR.
 
@@ -1644,6 +1656,8 @@ Commands for diffs:
 ignore space changes.
   With two prefix arguments (e.g., \\[universal-argument] \
 \\[universal-argument] \\[stgit-diff]), ignore all space changes.
+  With three prefix arguments (e.g., \\[universal-argument] \
+\\[universal-argument] \\[universal-argument] \\[stgit-diff]), show word diff.
 
 Commands for merge conflicts:
 \\[stgit-find-file-merge]	Resolve conflicts using `smerge-ediff'
@@ -2358,16 +2372,79 @@ If PATCHSYM is a keyword, returns PATCHSYM unmodified."
       (match-string 1 result))))
 
 (defun stgit-whitespace-diff-arg (arg)
-  (when (numberp arg)
-    (cond ((> arg 4) "--ignore-all-space")
-          ((> arg 1) "--ignore-space-change"))))
+  (cond ((> arg 16)
+         "--color-words")
+        ((> arg 4)
+         "--ignore-all-space")
+        ((> arg 1)
+         "--ignore-space-change")))
+
+(defun stgit-diff-words (buffer)
+  (let* ((ansi-new (with-output-to-string
+                     (stgit-run-git-silent "config" "--get-color"
+                                           "diff.color.new"
+                                           "green")))
+         (ansi-old (with-output-to-string
+                     (stgit-run-git-silent "config" "--get-color"
+                                           "diff.color.old"
+                                           "red")))
+         (ansi-reset (with-output-to-string
+                       (stgit-run-git-silent "config" "--get-color"
+                                             "diff.color.reset"
+                                             "reset")))
+         (regexp (concat "\\(" (regexp-quote ansi-new)
+                         "\\)\\|\\(" (regexp-quote ansi-old)
+                         "\\)\\|\\(" (regexp-quote ansi-reset)
+                         "\\)\\|\\(\033[^A-Za-z]*[A-Za-z]\\)"))
+         face
+         face-start)
+    (when (string-equal ansi-old ansi-new)
+      (error "git config diff.color.old is the same as diff.color.new"))
+    (when (string-equal ansi-old ansi-reset)
+      (error "git config diff.color.old is the same as diff.color.reset"))
+    (when (string-equal ansi-new ansi-reset)
+      (error "git config diff.color.new is the same as diff.color.reset"))
+
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      (while (re-search-forward regexp nil t)
+        (delete-char (- (match-beginning 0) (match-end 0)))
+        (let ((new-p (match-beginning 1))
+              (old-p (match-beginning 2))
+              (reset-p (match-beginning 3))
+              (ignore-p (match-beginning 4)))
+          (when face-start
+            (overlay-put (make-overlay face-start (point))
+                         'face face))
+          (cond (new-p
+                 (setq face 'stgit-word-diff-new
+                       face-start (point)))
+                (old-p
+                 (setq face 'stgit-word-diff-old
+                       face-start (point)))
+                (reset-p
+                 (setq face nil
+                       face-start nil))
+                (ignore-p)
+                (t (error "Internal error")))))
+      (diff-mode)
+      (face-remap-set-base 'diff-removed :inherit 'diff-context)
+      (face-remap-set-base 'diff-added :inherit 'diff-context)
+      (goto-char (point-min)))))
 
 (defun stgit-show-patch (unmerged-stage ignore-whitespace)
   "Show the patch on the current line.
 
 UNMERGED-STAGE is the argument to `git-diff' that that selects
-which stage to diff against in the case of unmerged files."
-  (let* ((space-arg (stgit-whitespace-diff-arg ignore-whitespace))
+which stage to diff against in the case of unmerged files.
+
+IGNORE-WHITESPACE controls the operation:
+  > 16:  color words
+  >  4:  ignore all whitespace
+  >  1:  ignore whitespace
+  <= 0:  normal"
+  (let* ((whitespace-arg (stgit-whitespace-diff-arg ignore-whitespace))
+	 (color-words (and (numberp mode-arg) (> mode-arg 16)))
          (patch-name (stgit-patch-name-at-point t))
          (entry-type (get-text-property (point) 'entry-type))
          (diff-desc (case entry-type
@@ -2380,62 +2457,68 @@ which stage to diff against in the case of unmerged files."
           ('file
            (let* ((patched-file (stgit-patched-file-at-point))
                   (patch-id (let ((id (stgit-id patch-name)))
-                              (if (and (eq id :index)
-                                       (eq (stgit-file->status patched-file)
-                                           'unmerged))
-                                  :work
-                                id)))
-                  (args (append (and space-arg (list space-arg))
-                                (and (stgit-file->cr-from patched-file)
-                                     (list (stgit-find-copies-harder-diff-arg)))
-                                (cond ((eq patch-id :index)
-                                       '("--cached"))
-                                      ((eq patch-id :work)
-                                       (list unmerged-stage))
-                                      (t
-                                       (list (concat patch-id "^") patch-id)))
-                                (and (eq (stgit-file->status patched-file)
-                                         'copy)
-                                     '("--diff-filter=C"))
-                                '("--")
-                                (if (stgit-file->copy-or-rename patched-file)
-                                    (list (stgit-file->cr-from patched-file)
-                                          (stgit-file->cr-to patched-file))
-                                  (list (stgit-file->file patched-file))))))
-             (apply 'stgit-run-git "diff" args)))
-          ('patch
-           (let* ((patch-id (stgit-id patch-name)))
-             (if (or (eq patch-id :index) (eq patch-id :work))
-                 (apply 'stgit-run-git "diff"
-                        (stgit-find-copies-harder-diff-arg)
-                        (append (and space-arg (list space-arg))
-                                (if (eq patch-id :index)
-                                    '("--cached")
-                                  (list unmerged-stage))))
-               (let ((args (append '("show" "-O" "--patch-with-stat")
-                                   `("-O" ,(stgit-find-copies-harder-diff-arg))
-                                   (and space-arg (list "-O" space-arg))
-                                   '("--")
-                                   (list (stgit-patch-name-at-point)))))
-                 (apply 'stgit-run args))))))
+                            (if (and (eq id :index)
+                                     (eq (stgit-file->status patched-file)
+                                         'unmerged))
+                                :work
+                              id)))
+                (args (append (and whitespace-arg (list whitespace-arg))
+                              (and (stgit-file->cr-from patched-file)
+                                   (list (stgit-find-copies-harder-diff-arg)))
+                              (cond ((eq patch-id :index)
+                                     '("--cached"))
+                                    ((eq patch-id :work)
+                                     (list unmerged-stage))
+                                    (t
+                                     (list (concat patch-id "^") patch-id)))
+                              (and (eq (stgit-file->status patched-file) 'copy)
+                                   '("--diff-filter=C"))
+			      (unless color-words '("--no-color"))
+			      '("--")
+                              (if (stgit-file->copy-or-rename patched-file)
+                                  (list (stgit-file->cr-from patched-file)
+                                        (stgit-file->cr-to patched-file))
+                                (list (stgit-file->file patched-file))))))
+           (apply 'stgit-run-git "diff" args)))
+        ('patch
+         (let* ((patch-id (stgit-id patch-name)))
+           (if (or (eq patch-id :index) (eq patch-id :work))
+               (apply 'stgit-run-git "diff"
+                      (stgit-find-copies-harder-diff-arg)
+                      "--no-color"
+                      (append (and whitespace-arg (list whitespace-arg))
+                              (if (eq patch-id :index)
+                                  '("--cached")
+                                (list unmerged-stage))))
+             (let ((args (append '("show" "-O" "--patch-with-stat")
+                                 `("-O" ,(stgit-find-copies-harder-diff-arg))
+                                 (and whitespace-arg `("-O" ,whitespace-arg))
+				 (unless color-words '("-O" "--no-color"))
+                                 '("--")
+                                 (list (stgit-patch-name-at-point)))))
+               (apply 'stgit-run args))))))
+      (if color-words
+          (stgit-diff-words standard-output)
         (with-current-buffer standard-output
           (goto-char (point-min))
-          (diff-mode))))))
+          (diff-mode)))))))
 
 (defmacro stgit-define-diff (name diff-arg &optional unmerged-action)
-  `(defun ,name (&optional ignore-whitespace)
+  `(defun ,name (&optional mode-arg)
      ,(format "Show the patch on the current line.
 
-%sWith a prefix argument, ignore whitespace. With a prefix argument
-greater than four (e.g., \\[universal-argument] \
-\\[universal-argument] \\[%s]), ignore all whitespace."
+%sWith a prefix argument, ignore whitespace;
+if greater than four (e.g., \\[universal-argument] \
+\\[universal-argument] \\[%s]), ignore all whitespace;
+if greater than 16 (e.g., \\[universal-argument] \
+\\[universal-argument] \\[universal-argument] \\[%s]), show word diff."
               (if unmerged-action
                   (format "For unmerged files, %s.\n\n" unmerged-action)
                 "")
-              name)
+              name name)
      (interactive "p")
      (stgit-assert-mode)
-     (stgit-show-patch ,diff-arg ignore-whitespace)))
+     (stgit-show-patch ,diff-arg mode-arg)))
 
 (stgit-define-diff stgit-diff
                    "--ours" nil)
@@ -2475,14 +2558,16 @@ greater than four (e.g., \\[universal-argument] \
     (stgit-capture-output (format "*StGit diff %s..%s*"
                                   first-patch second-patch)
       (apply 'stgit-run-git
-             "diff" "--patch-with-stat"
+             "diff" "--patch-with-stat" "--no-color"
              (stgit-find-copies-harder-diff-arg)
              (append (and whitespace-arg (list whitespace-arg))
                      (list (format "%s^" (stgit-id first-patch))
                            (stgit-id second-patch))))
-      (with-current-buffer standard-output
-        (goto-char (point-min))
-        (diff-mode)))))
+      (if (and (numberp ignore-whitespace) (> ignore-whitespace 16))
+          (stgit-diff-words standard-output)
+        (with-current-buffer standard-output
+          (goto-char (point-min))
+          (diff-mode))))))
 
 (defun stgit-move-change-to-index (file &optional force)
   "Copies the work tree state of FILE to index, using git add or git rm.
