@@ -1064,8 +1064,46 @@ at point."
                                "\n")))))
     (goto-char end)))
 
+(defun stgit-update-versioned-file ()
+  (let ((blob-sha1 (with-output-to-string
+                     (stgit-run-git-silent "hash-object" "-t" "blob" "-w"
+                                           "--path" stgit-file-name
+                                           buffer-file-name)))
+        (patch-sha1 (unless (eq stgit-patchsym :index)
+                      (stgit-id stgit-patchsym))))
+    (when patch-sha1
+      (unless (and (stgit-index-empty-p)
+                   (stgit-work-tree-empty-p))
+        (error "Index and worktree must not contain any changes"))
+      (stgit-run-git "read-tree" "-i" "--reset" patch-sha1))
+
+    (let ((state (with-output-to-string
+                   (stgit-run-git-silent (concat "--git-dir="
+                                                 stgit-top-dir
+                                                 ".git")
+                                         "ls-files" "--stage" "-z"
+                                         stgit-file-name))))
+      (unless (string-match "\\`\\([0-7]+\\) [0-9a-f]+ [012]\t.*\0\\'"
+                            state)
+        (error "Failed to parse output from git ls-files: %S -> %S"
+               stgit-file-name state))
+      (let ((mode (match-string 1 state)))
+        (stgit-capture-output "*(St)Git output*"
+          (stgit-run-git "update-index" "--add" "--cacheinfo" mode
+                         blob-sha1 stgit-file-name)
+          (when patch-sha1
+            (let ((tree-sha1 (stgit-read-sha1
+                              (with-output-to-string
+                                (stgit-run-git-silent "write-tree"))
+                              t)))
+              (stgit-run-git "reset" "--hard" "-q")
+              (stgit-run "edit" "--set-tree" tree-sha1 "--" stgit-patchsym)))))
+
+      (stgit-update-stgit-for-buffer (if patch-sha1 :reload :index)))))
+
 (defun stgit-find-file-revision (file patchsym &optional other-window)
-  (let ((filename (expand-file-name (concat (file-name-nondirectory file)
+  (let ((top-dir  default-directory)
+        (filename (expand-file-name (concat (file-name-nondirectory file)
                                             ".~" (symbol-name patchsym) "~")
                                     (file-name-directory file))))
     (let ((coding-system-for-read 'no-conversion)
@@ -1082,7 +1120,11 @@ at point."
                  'switch-to-buffer-other-window
                'switch-to-buffer)
              (find-file-noselect filename))
-    (set (make-local-variable 'vc-parent-buffer) filename)))
+    (set (make-local-variable 'vc-parent-buffer) filename)
+    (set (make-local-variable 'stgit-file-name)  file)
+    (set (make-local-variable 'stgit-patchsym)   patchsym)
+    (set (make-local-variable 'stgit-top-dir)    top-dir)
+    (add-hook 'after-save-hook 'stgit-update-versioned-file nil t)))
 
 (defun stgit-find-file (&optional other-window this-rev)
   (let* ((file (or (stgit-patched-file-at-point)
@@ -2360,16 +2402,22 @@ patches if used on a line after or before all patches."
            (stgit-run "goto" "--" patchsym))
          (stgit-reload)))))
 
+(defun stgit-read-sha1 (string &optional cause-error)
+  (cond ((string-match "\\`\\([0-9A-Fa-f]\\{40\\}\\)$" string)
+         (match-string 1 string))
+        (cause-error
+         (error "Cannot find SHA1"))))
+
 (defun stgit-id (patchsym)
   "Return the git commit id for PATCHSYM.
 If PATCHSYM is a keyword, returns PATCHSYM unmodified."
   (if (keywordp patchsym)
       patchsym
-    (let ((result (with-output-to-string
-		    (stgit-run-silent "id" "--" patchsym))))
-      (unless (string-match "^\\([0-9A-Fa-f]\\{40\\}\\)$" result)
+    (let ((sha1 (stgit-read-sha1 (with-output-to-string
+                                   (stgit-run-silent "id" "--" patchsym)))))
+      (unless sha1
 	(error "Cannot find commit id for %s" patchsym))
-      (match-string 1 result))))
+      sha1)))
 
 (defun stgit-whitespace-diff-arg (arg)
   (cond ((> arg 16)
