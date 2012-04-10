@@ -1412,7 +1412,9 @@ If ARG is non-nil, do this ARG times. If ARG is negative, move
             ("m" .        stgit-find-file-merge)
             ("o" .        stgit-diff-ours)
             ("r" .        stgit-diff-range)
-            ("t" .        stgit-diff-theirs)))
+            ("t" .        stgit-diff-theirs)
+            ("\\" .       stgit-split-previous)
+            ("/" .        stgit-split-next)))
     (mapc (lambda (arg) (define-key toggle-map (car arg) (cdr arg)))
           '(("n" .        stgit-toggle-patch-names)
             ("t" .        stgit-toggle-worktree)
@@ -2490,7 +2492,9 @@ IGNORE-WHITESPACE controls the operation:
   > 16:  color words
   >  4:  ignore all whitespace
   >  1:  ignore whitespace
-  <= 0:  normal"
+  <= 0:  normal
+
+Non-interactively, returns the buffer showing the patch."
   (let* ((whitespace-arg (stgit-whitespace-diff-arg ignore-whitespace))
 	 (color-words (and (numberp mode-arg) (> mode-arg 16)))
          (patch-name (stgit-patch-name-at-point t))
@@ -2498,9 +2502,11 @@ IGNORE-WHITESPACE controls the operation:
          (diff-desc (case entry-type
                       ('file "diff")
                       ('patch "patch")
-                      (t (error "No patch or file at point")))))
+                      (t (error "No patch or file at point"))))
+         result)
     (stgit-show-task-message (concat "Showing " diff-desc)
       (stgit-capture-output (concat "*StGit " diff-desc "*")
+        (setq result standard-output)
         (case entry-type
           ('file
            (let* ((patched-file (stgit-patched-file-at-point))
@@ -2549,7 +2555,8 @@ IGNORE-WHITESPACE controls the operation:
           (stgit-diff-words standard-output)
         (with-current-buffer standard-output
           (goto-char (point-min))
-          (diff-mode)))))))
+          (diff-mode)))))
+    result))
 
 (defmacro stgit-define-diff (name diff-arg &optional unmerged-action)
   `(defun ,name (&optional mode-arg)
@@ -2566,7 +2573,7 @@ if greater than 16 (e.g., \\[universal-argument] \
               name name)
      (interactive "p")
      (stgit-assert-mode)
-     (stgit-show-patch ,diff-arg mode-arg)))
+     (stgit-show-patch ,diff-arg (or mode-arg 0))))
 
 (stgit-define-diff stgit-diff
                    "--ours" nil)
@@ -2582,6 +2589,52 @@ if greater than 16 (e.g., \\[universal-argument] \
 (stgit-define-diff stgit-diff-combined
                    "--cc"
                    "show a combined diff")
+
+(defun stgit-split (next-p)
+  (let ((patch (if next-p
+                   (progn
+                     (save-excursion
+                       (stgit-next-patch 1)
+                       (or (stgit-patch-name-at-point nil t)
+                           (error "There is no next patch here.")))
+                     (stgit-patch-name-at-point t t))
+                 (save-excursion
+                   (stgit-previous-patch 1)
+                   (or (stgit-patch-name-at-point nil t)
+                       (error "There is no previous patch here.")))))
+        (diff-buffer (stgit-diff)))
+    (pop-to-buffer diff-buffer)
+    (goto-char (point-min))
+    (let ((inhibit-read-only t))
+      (while (re-search-forward "^\\([-+]\\)\\{3\\} \\([ab]\\)/\\(.*\\)"
+                                nil t)
+        (let* ((file-name           (match-string 3))
+               (suffix              (concat ".~" (symbol-name patch) "~"))
+               (versioned-file-name (concat file-name suffix)))
+          (unless (find-buffer-visiting versioned-file-name)
+            (save-window-excursion
+              (stgit-find-file-revision file-name patch t)))
+          (insert-before-markers-and-inherit suffix))))
+    (goto-char (point-min))
+    (set (make-local-variable 'diff-apply-hunk-to-backup-file) t)))
+
+(defun stgit-split-previous ()
+  "Opens the patch on the current line and allows you to apply
+the changes on the previous patch.
+
+Any changes applied and saved in this way will seem to move from
+the current patch to the previous patch."
+  (interactive)
+  (stgit-split nil))
+
+(defun stgit-split-next ()
+  "Opens the patch on the current line and allows you to apply
+any changes on the current patch.
+
+Any changes applied and saved in this way will seem to move from
+the current patch to the next patch."
+  (interactive)
+  (stgit-split t))
 
 (defun stgit-diff-range (&optional ignore-whitespace)
   "Show diff for the range of patches between point and the marked patch.
