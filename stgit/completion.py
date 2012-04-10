@@ -58,6 +58,23 @@ def util():
              'esac'),
          fun('_stg_branches',
              'local g=$(_gitdir)', 'test "$g" && (cd $g/patches/ && echo *)'),
+         fun_desc(
+            '_all_branch_patches',
+            'List of all branches and their patches.',
+            'local cur=${COMP_WORDS[COMP_CWORD]}',
+            'for branch in $(_all_branches); do', [
+                'echo "$branch"',
+                'local pdir=$(_gitdir)/patches/$branch',
+                'if test -d "$pdir"; then', [
+                    'if test "${cur:0:${#branch}}" = "$branch"; then', [
+                        ('cat "$pdir/applied" "$pdir/unapplied" "$pdir/hidden"'
+                         ' | while read p; do echo "$branch:$p"; done'), ],
+                    'else', [
+                        'echo "$branch:"'
+                        ],
+                    'fi' ],
+                'fi' ],
+            'done'),
          ref_list_fun('_all_branches', 'refs/heads'),
          ref_list_fun('_tags', 'refs/tags'),
          ref_list_fun('_remotes', 'refs/remotes')]
