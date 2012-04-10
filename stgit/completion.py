@@ -31,15 +31,29 @@ def file_list_fun(name, cmd):
     return fun('_%s_files' % name, 'local g=$(_gitdir)',
                'test "$g" && %s' % cmd)
 
-def ref_list_fun(name, prefix):
+def ref_list_raw_fun(name, prefix):
     return fun(name, 'local g=$(_gitdir)',
                ("test \"$g\" && git show-ref | grep ' %s/' | sed 's,.* %s/,,'"
+                % (prefix, prefix)))
+
+def ref_list_fun(name, prefix):
+    return fun(name, 'local g=$(_gitdir)',
+               ("test \"$g\" && _filter_colon_prefix \"$pfx\" $(git show-ref | grep ' %s/' | sed 's,.* %s/,,')"
                 % (prefix, prefix)))
 
 def util():
     r = [fun_desc('_gitdir',
                   "The path to .git, or empty if we're not in a repository.",
                   'echo "$(git rev-parse --git-dir 2>/dev/null)"'),
+         fun_desc(
+            '_filter_colon_prefix',
+            'Filter out prefix if necessary.',
+            'local pfx="$1"',
+            'shift',
+            'for l in $*; do', [
+                ('test "${l:0:${#pfx}}" = "$pfx"'
+                 ' && echo "${l:${#pfx}}"') ],
+            'done'),
          fun_desc('_current_branch',
                   "Name of the current branch, or empty if there isn't one.",
                   'local b=$(git symbolic-ref HEAD 2>/dev/null)',
@@ -61,20 +75,22 @@ def util():
          fun_desc(
             '_all_branch_patches',
             'List of all branches and their patches.',
-            'local cur=${COMP_WORDS[COMP_CWORD]}',
-            'for branch in $(_all_branches); do', [
+            '_filter_colon_prefix "$pfx" $(for branch in $(_raw_all_branches); do', [
                 'echo "$branch"',
                 'local pdir=$(_gitdir)/patches/$branch',
                 'if test -d "$pdir"; then', [
                     'if test "${cur:0:${#branch}}" = "$branch"; then', [
                         ('cat "$pdir/applied" "$pdir/unapplied" "$pdir/hidden"'
-                         ' | while read p; do echo "$branch:$p"; done'), ],
+                         ' | while read p; do'), [
+                            'echo "$branch:$p"', ],
+                        'done', ],
                     'else', [
                         'echo "$branch:"'
                         ],
                     'fi' ],
                 'fi' ],
-            'done'),
+            'done )'),
+         ref_list_raw_fun('_raw_all_branches', 'refs/heads'),
          ref_list_fun('_all_branches', 'refs/heads'),
          ref_list_fun('_tags', 'refs/tags'),
          ref_list_fun('_remotes', 'refs/remotes')]
@@ -95,7 +111,7 @@ def command_fun(cmd, modname):
     mod = stgit.commands.get_command(modname)
     def cg(args, flags):
         return argparse.compjoin(list(args) + [argparse.strings(*flags)]
-                                 ).command('$cur')
+                                 ).command('$sfx')
     return fun(
         '_stg_%s' % cmd,
         'local flags="%s"' % ' '.join(sorted(
@@ -105,10 +121,20 @@ def command_fun(cmd, modname):
                      for flag in opt.flags if flag.startswith('--'))))),
         'local prev="${COMP_WORDS[COMP_CWORD-1]}"',
         'local cur="${COMP_WORDS[COMP_CWORD]}"',
+        'local sfx="$cur"',
+        'local pfx',
+        'case "$COMP_WORDBREAKS" in',
+        '*:*)', [
+            'case "$cur" in',
+            '?*:*)', [
+                'pfx="${cur%%:*}:"',
+                'sfx="${cur:${#pfx}}" ;;', ],
+            'esac ;;', ],
+        'esac',
         'case "$prev" in', [
             '%s) COMPREPLY=($(%s)) ;;' % ('|'.join(opt.flags), cg(opt.args, []))
             for opt in mod.options if opt.args] + [
-            '*) COMPREPLY=($(%s)) ;;' % cg(mod.args, ['$flags'])],
+            '*) COMPREPLY=($(%s)) ;;' % cg(mod.args, ['$(_filter_colon_prefix "$pfx" $flags)'])],
         'esac')
 
 def main_switch(commands):
